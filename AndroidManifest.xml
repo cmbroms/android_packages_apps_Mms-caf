@@ -281,6 +281,9 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="org.codeaurora.intent.action.ACTION_SUBSCRIPTION_SET_UICC_RESULT" />
+            </intent-filter>
         </receiver>
 
         <activity android:name=".ui.ManageSimMessages"
@@ -352,7 +355,7 @@
         <activity android:name=".ui.MessageTemplate"
                   android:theme="@style/MmsTheme"
                   android:launchMode="singleTop"
-                  android:label="@string/message_template_title"
+                  android:label="@string/pref_title_message_template"
                   android:configChanges="orientation|screenSize" >
         </activity>
 
@@ -449,7 +452,22 @@
             android:excludeFromRecents="true"
             android:exported="true" />
 
-        <receiver android:name=".quickmessage.ClearAllReceiver" />
+        <!--QuickMessage for wear-->
+        <!-- This allows for users to reply to a message
+             via voice using there Android Wear device.
+             Make Transparent so that nothing shows on
+             screen but toasts for sending and errors-->
+        <activity android:name=".quickmessage.QuickMessageWear"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:exported="true"/>
+
+         <receiver
+            android:name=".quickmessage.QmMarkRead"
+            android:exported="true" />
+
+         <receiver android:name=".quickmessage.ClearAllReceiver" />
 
         <!-- Message Template Content Provider -->
         <provider android:name="MessageTemplateProvider"

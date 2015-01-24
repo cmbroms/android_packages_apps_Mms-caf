@@ -20,9 +20,12 @@
 
 package com.android.mms.ui;
 
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.text.DecimalFormat;
@@ -34,6 +37,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -47,20 +53,15 @@ import android.content.DialogInterface;
 import android.content.DialogInterface.OnCancelListener;
 import android.content.DialogInterface.OnClickListener;
 import android.content.Intent;
-import android.content.ContentResolver;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.Resources;
-import android.content.SharedPreferences;
-import android.content.res.TypedArray;
 import android.database.Cursor;
-import android.database.DatabaseUtils;
 import android.database.sqlite.SqliteWrapper;
 import android.graphics.drawable.Drawable;
 import android.media.CamcorderProfile;
 import android.media.RingtoneManager;
-import android.net.ConnectivityManager;
 import android.net.Uri;
 import android.os.Environment;
 import android.os.Handler;
@@ -70,12 +71,9 @@ import android.os.Messenger;
 import android.os.StatFs;
 import android.preference.PreferenceManager;
 import android.provider.ContactsContract;
-import android.provider.ContactsContract.Contacts;
 import android.provider.ContactsContract.CommonDataKinds.Phone;
 import android.provider.ContactsContract.CommonDataKinds.StructuredName;
-import android.provider.ContactsContract.Data;
 import android.provider.MediaStore;
-import android.provider.Settings;
 import android.provider.Telephony.Mms;
 import android.provider.Telephony.Sms;
 import android.provider.Telephony.Threads;
@@ -116,7 +114,6 @@ import com.android.mms.MmsConfig;
 import com.android.mms.R;
 import com.android.mms.TempFileProvider;
 import com.android.mms.data.WorkingMessage;
-import com.android.mms.model.VCalModel;
 import com.android.mms.model.MediaModel;
 import com.android.mms.model.SlideModel;
 import com.android.mms.model.SlideshowModel;
@@ -139,12 +136,12 @@ import com.google.android.mms.pdu.RetrieveConf;
 import com.google.android.mms.pdu.SendReq;
 
 import static android.telephony.SmsMessage.ENCODING_7BIT;
-import static android.telephony.SmsMessage.ENCODING_8BIT;
 import static android.telephony.SmsMessage.ENCODING_16BIT;
 import static android.telephony.SmsMessage.ENCODING_UNKNOWN;
 import static android.telephony.SmsMessage.MAX_USER_DATA_BYTES;
-import static android.telephony.SmsMessage.MAX_USER_DATA_BYTES_WITH_HEADER;
 import static android.telephony.SmsMessage.MAX_USER_DATA_SEPTETS;
+
+import static com.google.android.mms.ContentType.TEXT_VCALENDAR;
 
 /**
  * An utility class for managing messages.
@@ -563,7 +560,7 @@ public class MessageUtils {
         }
 
         // Sent: ***
-        if (smsType == Sms.MESSAGE_TYPE_SENT) {
+        if (smsType == Sms.MESSAGE_TYPE_INBOX) {
             long date_sent = cursor.getLong(cursor.getColumnIndexOrThrow(Sms.DATE_SENT));
             if (date_sent > 0) {
                 details.append('\n');
@@ -825,6 +822,20 @@ public class MessageUtils {
         }
     }
 
+    public static void selectCalendarEvents(Activity activity, int requestCode) {
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.setType(TEXT_VCALENDAR);
+        intent.putExtra("EXTRA_LIMIT_TO_ONE_EVENT", true);
+        intent.addCategory(Intent.CATEGORY_APP_CALENDAR);
+
+        try {
+            activity.startActivityForResult(intent, requestCode);
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(activity, activity.getResources().getString(
+                    R.string.calendar_attachment_activity_not_found), Toast.LENGTH_SHORT);
+        }
+    }
+
     public static void viewSimpleSlideshow(Context context, SlideshowModel slideshow) {
         if (!slideshow.isSimple()) {
             throw new IllegalArgumentException(
@@ -985,10 +996,8 @@ public class MessageUtils {
 
     public static void showDiscardDraftConfirmDialog(Context context,
             OnClickListener listener, int validNum) {
-        // the alert icon shoud has black triangle and white exclamation mark in white background.
         new AlertDialog.Builder(context)
-                .setIconAttribute(android.R.attr.alertDialogIcon)
-                .setTitle(R.string.discard_message)
+                .setTitle(R.string.discard)
                 .setMessage(getDiscardMessageId(validNum))
                 .setPositiveButton(R.string.yes, listener)
                 .setNegativeButton(R.string.no, null)
@@ -1006,7 +1015,7 @@ public class MessageUtils {
         // If validNum == ALL_RECIPIENTS_INVALID, means all of the recipients are invalid.
         if (ALL_RECIPIENTS_EMPTY != validNum) {
             msgId = validNum > ALL_RECIPIENTS_VALID ? R.string.discard_message_reason_some_invalid
-                : R.string.discard_message_reason_all_invalid;
+                : R.string.discard_message_reason;
         }
         return msgId;
     }
@@ -2594,15 +2603,13 @@ public class MessageUtils {
         @Override
         protected StringBuilder doInBackground(String... params) {
             StringBuilder memoryStatus = new StringBuilder();
-            memoryStatus.append(mContext.getString(R.string.sms_phone_used));
-            memoryStatus.append(" " + getSmsMessageCount(mContext) + "\n");
-            memoryStatus.append(mContext.getString(R.string.sms_phone_capacity));
-            memoryStatus.append(" " + mContext.getResources()
-                    .getInteger(R.integer.max_sms_message_count) + "\n\n");
-            memoryStatus.append(mContext.getString(R.string.mms_phone_used));
-            memoryStatus.append(" " + formatMemorySize(getMmsUsed(mContext)) + "\n");
-            memoryStatus.append(mContext.getString(R.string.mms_phone_capacity));
-            memoryStatus.append(" " + formatMemorySize(getStoreAll()) + "\n");
+            memoryStatus.append(mContext.getString(R.string.sms_phone_memory_usage,
+                    getSmsMessageCount(mContext),
+                    mContext.getResources().getInteger(R.integer.max_sms_message_count)));
+            memoryStatus.append("\n");
+            memoryStatus.append(mContext.getString(R.string.mms_phone_memory_usage,
+                    formatMemorySize(getMmsUsed(mContext)),
+                    formatMemorySize(getStoreAll())));
             return memoryStatus;
         }
 
@@ -2702,5 +2709,83 @@ public class MessageUtils {
             }
         }
         return number;
+    }
+
+    public static void zipFile(File inputFile, String zipFilePath) throws IOException {
+        FileOutputStream fileOutputStream = null;
+        ZipOutputStream zipOutputStream = null;
+        FileInputStream fileInputStream = null;
+
+        try {
+            fileOutputStream = new FileOutputStream(zipFilePath);
+            zipOutputStream = new ZipOutputStream(fileOutputStream);
+
+            ZipEntry zipEntry = new ZipEntry(inputFile.getName());
+            zipOutputStream.putNextEntry(zipEntry);
+
+            fileInputStream = new FileInputStream(inputFile);
+            byte[] buf = new byte[1024];
+            int bytesRead;
+
+            while ((bytesRead = fileInputStream.read(buf)) > 0) {
+                zipOutputStream.write(buf, 0, bytesRead);
+            }
+
+            zipOutputStream.closeEntry();
+
+            zipOutputStream.close();
+            fileOutputStream.close();
+        } finally {
+            if (fileOutputStream != null) {
+                fileOutputStream.close();
+            }
+            if (zipOutputStream != null) {
+                zipOutputStream.close();
+            }
+            if (fileInputStream != null) {
+                fileInputStream.close();
+            }
+        }
+    }
+
+    public static File unzipBackupFile(File zipFilePath, String destDirectory) throws IOException {
+        File destDir = new File(destDirectory);
+        if (!destDir.exists()) {
+            destDir.mkdir();
+        }
+
+        ZipInputStream zipIn = null;
+
+        try {
+            zipIn = new ZipInputStream(new FileInputStream(zipFilePath));
+            ZipEntry entry = zipIn.getNextEntry();
+            while (entry != null) {
+                String filePath = destDirectory + File.separator + entry.getName();
+                if (!entry.isDirectory()) {
+                    return extractFile(zipIn, filePath);
+                } else {
+                    // No backup file found in zip
+                    return null;
+                }
+            }
+
+            return null;
+        } finally {
+            if (zipIn != null) {
+                zipIn.close();
+            }
+        }
+    }
+
+    private static File extractFile(ZipInputStream zipIn, String filePath) throws IOException {
+        BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(filePath));
+        byte[] bytesIn = new byte[4096];
+        int read = 0;
+        while ((read = zipIn.read(bytesIn)) != -1) {
+            bos.write(bytesIn, 0, read);
+        }
+        bos.close();
+
+        return new File(filePath);
     }
 }

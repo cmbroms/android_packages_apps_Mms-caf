@@ -71,11 +71,7 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SqliteWrapper;
 import android.drm.DrmStore;
-import android.graphics.Color;
-import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
-import android.graphics.drawable.Drawable;
-import android.graphics.drawable.VectorDrawable;
 import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.AsyncTask;
@@ -117,11 +113,9 @@ import android.view.ActionMode;
 import android.view.ContextMenu;
 import android.view.ContextMenu.ContextMenuInfo;
 import android.view.KeyEvent;
-import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
-import android.view.ViewGroup;
 import android.view.View;
 import android.view.View.OnCreateContextMenuListener;
 import android.view.View.OnKeyListener;
@@ -138,7 +132,6 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.Toolbar;
-import android.widget.Button;
 
 import com.android.contacts.common.util.MaterialColorMapUtils;
 import com.android.contacts.common.util.MaterialColorMapUtils.MaterialPalette;
@@ -198,20 +191,21 @@ import com.google.android.mms.pdu.SendReq;
 public class ComposeMessageActivity extends Activity
         implements View.OnClickListener, TextView.OnEditorActionListener,
         MessageStatusListener, Contact.UpdateListener, IZoomListener {
-    public static final int REQUEST_CODE_ATTACH_IMAGE     = 100;
-    public static final int REQUEST_CODE_TAKE_PICTURE     = 101;
-    public static final int REQUEST_CODE_ATTACH_VIDEO     = 102;
-    public static final int REQUEST_CODE_TAKE_VIDEO       = 103;
-    public static final int REQUEST_CODE_ATTACH_SOUND     = 104;
-    public static final int REQUEST_CODE_RECORD_SOUND     = 105;
-    public static final int REQUEST_CODE_CREATE_SLIDESHOW = 106;
-    public static final int REQUEST_CODE_ECM_EXIT_DIALOG  = 107;
-    public static final int REQUEST_CODE_ADD_CONTACT      = 108;
-    public static final int REQUEST_CODE_PICK             = 109;
-    public static final int REQUEST_CODE_ATTACH_ADD_CONTACT_INFO     = 110;
-    public static final int REQUEST_CODE_ATTACH_ADD_CONTACT_VCARD    = 111;
-    public static final int REQUEST_CODE_ATTACH_REPLACE_CONTACT_INFO = 112;
-    public static final int REQUEST_CODE_ADD_RECIPIENTS   = 113;
+    public static final int REQUEST_CODE_ATTACH_IMAGE                   = 100;
+    public static final int REQUEST_CODE_TAKE_PICTURE                   = 101;
+    public static final int REQUEST_CODE_ATTACH_VIDEO                   = 102;
+    public static final int REQUEST_CODE_TAKE_VIDEO                     = 103;
+    public static final int REQUEST_CODE_ATTACH_SOUND                   = 104;
+    public static final int REQUEST_CODE_RECORD_SOUND                   = 105;
+    public static final int REQUEST_CODE_CREATE_SLIDESHOW               = 106;
+    public static final int REQUEST_CODE_ECM_EXIT_DIALOG                = 107;
+    public static final int REQUEST_CODE_ADD_CONTACT                    = 108;
+    public static final int REQUEST_CODE_PICK                           = 109;
+    public static final int REQUEST_CODE_ATTACH_ADD_CONTACT_INFO        = 110;
+    public static final int REQUEST_CODE_ATTACH_ADD_CONTACT_VCARD       = 111;
+    public static final int REQUEST_CODE_ATTACH_REPLACE_CONTACT_INFO    = 112;
+    public static final int REQUEST_CODE_ADD_RECIPIENTS                 = 113;
+    public static final int REQUEST_CODE_ADD_CALENDAR_EVENTS            = 114;
 
     private static final String TAG = LogTag.TAG;
 
@@ -474,7 +468,7 @@ public class ComposeMessageActivity extends Activity
     private final static String MSG_SUBJECT_SIZE = "subject_size";
 
     private boolean mShowAttachIcon = false;
-    private final static int REPLACE_ATTACHMEN_MASK = 1 << 16;
+    private final static int REPLACE_ATTACHMENT_MASK = 1 << 16;
 
     private boolean mShowTwoButtons = false;
 
@@ -893,12 +887,6 @@ public class ComposeMessageActivity extends Activity
         }
     }
 
-    private void dismissMsimDialog() {
-        if (mMsimDialog != null) {
-            mMsimDialog.dismiss();
-        }
-    }
-
    private void processMsimSendMessage(int phoneId, final boolean bCheckEcmMode) {
         if (mMsimDialog != null) {
             mMsimDialog.dismiss();
@@ -908,64 +896,17 @@ public class ComposeMessageActivity extends Activity
     }
 
     private void LaunchMsimDialog(final boolean bCheckEcmMode) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(ComposeMessageActivity.this);
-        LayoutInflater inflater = (LayoutInflater) getSystemService(LAYOUT_INFLATER_SERVICE);
-        View layout = inflater.inflate(R.layout.multi_sim_sms_sender,
-                              (ViewGroup)findViewById(R.id.layout_root));
-        builder.setView(layout);
-        builder.setOnKeyListener(new DialogInterface.OnKeyListener() {
-                public boolean onKey(DialogInterface dialog, int keyCode, KeyEvent event) {
-                    switch (keyCode) {
-                        case KeyEvent.KEYCODE_BACK: {
-                            dismissMsimDialog();
-                            return true;
-                        }
-                        case KeyEvent.KEYCODE_SEARCH: {
-                            return true;
-                        }
-                    }
-                    return false;
-                }
-            }
-        );
-
-        builder.setNegativeButton(R.string.no, new DialogInterface.OnClickListener() {
-            public void onClick(DialogInterface dialog, int which) {
-                dismissMsimDialog();
-            }
-        });
-
         ContactList recipients = isRecipientsEditorVisible() ?
             mRecipientsEditor.constructContactsFromInput(false) : getRecipients();
-        builder.setTitle(getResources().getString(R.string.to_address_label)
-                + recipients.formatNamesAndNumbers(","));
-
-        mMsimDialog = builder.create();
-        mMsimDialog.setCanceledOnTouchOutside(true);
-
-        int[] smsBtnIds = {R.id.BtnSimOne, R.id.BtnSimTwo, R.id.BtnSimThree};
-        int phoneCount = TelephonyManager.getDefault().getPhoneCount();
-        Button[] smsBtns = new Button[phoneCount];
-
-        for (int i = 0; i < phoneCount; i++) {
-            final int phoneId = i;
-            smsBtns[i] = (Button) layout.findViewById(smsBtnIds[i]);
-            smsBtns[i].setVisibility(View.VISIBLE);
-            List<SubInfoRecord> sir = SubscriptionManager.getSubInfoUsingSlotId(phoneId);
-
-            String displayName = ((sir != null) && (sir.size() > 0)) ?
-                    sir.get(0).displayName : "SIM " + (i + 1);
-
-            Log.e(TAG, "PhoneID : " + phoneId + " displayName " + displayName);
-            smsBtns[i].setText(displayName);
-            smsBtns[i].setOnClickListener(
-                new View.OnClickListener() {
-                    public void onClick(View v) {
-                        Log.d(TAG, "Phone Id slected " + phoneId);
-                        processMsimSendMessage(phoneId, bCheckEcmMode);
-                }
-            });
-        }
+        mMsimDialog = new MsimDialog(this,
+                                     new MsimDialog.OnSimButtonClickListener() {
+                                         @Override
+                                         public void onSimButtonClick(int phoneId) {
+                                             processMsimSendMessage(phoneId,
+                                                                    bCheckEcmMode);
+                                         }
+                                     },
+                                     recipients);
         mMsimDialog.show();
     }
 
@@ -3270,7 +3211,7 @@ public class ComposeMessageActivity extends Activity
 
         TemplateSelectListener listener = new TemplateSelectListener(smsTempArray);
         return new AlertDialog.Builder(ComposeMessageActivity.this)
-                .setTitle(R.string.message_template)
+                .setTitle(R.string.import_message_template)
                 .setItems(smsTempArray, listener)
                 .create();
     }
@@ -3374,16 +3315,16 @@ public class ComposeMessageActivity extends Activity
     }
 
     private boolean isAppendRequest(int requestCode) {
-        return (requestCode & REPLACE_ATTACHMEN_MASK) == 0;
+        return (requestCode & REPLACE_ATTACHMENT_MASK) == 0;
     }
 
     private int getRequestCode(int requestCode) {
-        return requestCode & ~REPLACE_ATTACHMEN_MASK;
+        return requestCode & ~REPLACE_ATTACHMENT_MASK;
     }
 
     private int getMakRequestCode(boolean replace, int requestCode) {
         if (replace) {
-            return requestCode | REPLACE_ATTACHMEN_MASK;
+            return requestCode | REPLACE_ATTACHMENT_MASK;
         }
         return requestCode;
     }
@@ -3452,6 +3393,10 @@ public class ComposeMessageActivity extends Activity
                 pickContacts(SelectRecipientsList.MODE_VCARD,
                         REQUEST_CODE_ATTACH_ADD_CONTACT_VCARD);
                 break;
+
+            case AttachmentTypeSelectorAdapter.ADD_CALENDAR_EVENTS:
+                MessageUtils.selectCalendarEvents(this,
+                        getMakRequestCode(replace, REQUEST_CODE_ADD_CALENDAR_EVENTS));
 
             default:
                 break;
@@ -3639,6 +3584,7 @@ public class ComposeMessageActivity extends Activity
                 if (data != null) {
                     mWorkingMessage.removeAttachment(true);
                 }
+
             case REQUEST_CODE_ATTACH_ADD_CONTACT_INFO:
                 if (data != null) {
                     String newText = mWorkingMessage.getText() +
@@ -3661,6 +3607,17 @@ public class ComposeMessageActivity extends Activity
                 insertNumbersIntoRecipientsEditor(
                         data.getStringArrayListExtra(SelectRecipientsList.EXTRA_RECIPIENTS));
                 break;
+
+            case REQUEST_CODE_ADD_CALENDAR_EVENTS:
+                if (data != null) {
+                    // get shared event files (.vcs)
+                    ArrayList<Uri> uris = data.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+                    // since mms is lacking the ability to add multiple attachments, add the first
+                    // and only event requested
+                    if (uris.size() > 0) {
+                        addVCal(uris.get(0));
+                    }
+                }
 
             default:
                 if (LogTag.VERBOSE) log("bail due to unknown requestCode=" + requestCode);
@@ -4285,8 +4242,9 @@ public class ComposeMessageActivity extends Activity
                 updateSendButtonState();
                 if (s.toString().getBytes().length == SUBJECT_MAX_LENGTH
                         && before < SUBJECT_MAX_LENGTH) {
-                    Toast.makeText(ComposeMessageActivity.this,
-                            R.string.subject_full, Toast.LENGTH_SHORT).show();
+                    String toast = getString(R.string.subject_full, SUBJECT_MAX_LENGTH);
+                    Toast.makeText(ComposeMessageActivity.this, toast,
+                            Toast.LENGTH_SHORT).show();
                 }
             }
         }
@@ -4295,13 +4253,11 @@ public class ComposeMessageActivity extends Activity
         public void afterTextChanged(Editable s) {
             if (s.toString().getBytes().length > SUBJECT_MAX_LENGTH) {
                 String subject = s.toString();
-                Toast.makeText(ComposeMessageActivity.this,
-                        R.string.subject_full, Toast.LENGTH_SHORT).show();
-                while (subject.getBytes().length > SUBJECT_MAX_LENGTH) {
-                    subject = subject.substring(0, subject.length() - 1);
-                }
+                String toast = getString(R.string.subject_full, SUBJECT_MAX_LENGTH);
+                Toast.makeText(ComposeMessageActivity.this, toast,
+                        Toast.LENGTH_SHORT).show();
                 s.clear();
-                s.append(subject);
+                s.append(subject.substring(0, SUBJECT_MAX_LENGTH));
             }
         }
     };
@@ -5273,11 +5229,9 @@ public class ComposeMessageActivity extends Activity
                 // Rebuild the message list so each MessageItem will get the last contact info.
                 ComposeMessageActivity.this.mMsgListAdapter.notifyDataSetChanged();
 
-                // Don't do this anymore. When we're showing chips, we don't want to switch from
-                // chips to text.
-//                if (mRecipientsEditor != null) {
-//                    mRecipientsEditor.populate(recipients);
-//                }
+                if (mRecipientsEditor != null) {
+                    mRecipientsEditor.populate(recipients);
+                }
             }
         });
     }
@@ -5350,7 +5304,7 @@ public class ComposeMessageActivity extends Activity
             default:
                 break;
             }
-            String toast = getString(R.string.copy_to_sim_success, sum, success);
+            String toast = getString(R.string.copy_to_sim_success, success, sum);
             Toast.makeText(ComposeMessageActivity.this, toast,
                     Toast.LENGTH_SHORT).show();
         }
@@ -5677,10 +5631,20 @@ public class ComposeMessageActivity extends Activity
             StringBuilder sBuilder = new StringBuilder();
             for (Integer pos : mSelectedPos) {
                 Cursor c = (Cursor) getListView().getAdapter().getItem(pos);
-                sBuilder.append(c.getString(COLUMN_SMS_BODY));
+                String type = c.getString(COLUMN_MSG_TYPE);
+                if (type.equals("mms")) {
+                    sBuilder.append(mMsgListAdapter.getCachedBodyForPosition(pos));
+                } else {
+                    sBuilder.append(c.getString(COLUMN_SMS_BODY));
+                }
                 sBuilder.append(LINE_BREAK);
             }
-            copyToClipboard(sBuilder.toString());
+            if (!TextUtils.isEmpty(sBuilder.toString())) {
+                copyToClipboard(sBuilder.toString());
+            } else {
+                Toast.makeText(ComposeMessageActivity.this, R.string.copy_empty_string,
+                        Toast.LENGTH_SHORT).show();
+            }
         }
 
         private void copySmsToSim() {
@@ -5910,7 +5874,6 @@ public class ComposeMessageActivity extends Activity
 
             boolean noMmsSelected = mMmsSelected == 0;
             menu.findItem(R.id.copy_to_sim).setVisible(noMmsSelected);
-            menu.findItem(R.id.copy).setVisible(noMmsSelected);
 
             if (checkedCount > 1) {
                 // no detail
@@ -5937,7 +5900,6 @@ public class ComposeMessageActivity extends Activity
                 if (mMmsSelected > 0) {
                     mode.getMenu().findItem(R.id.forward).setVisible(false);
                     mode.getMenu().findItem(R.id.copy_to_sim).setVisible(false);
-                    mode.getMenu().findItem(R.id.copy).setVisible(false);
                 } else {
                     if (getResources().getBoolean(R.bool.config_forwardconv)) {
                         mode.getMenu().findItem(R.id.forward).setVisible(true);
@@ -5974,7 +5936,6 @@ public class ComposeMessageActivity extends Activity
 
                 if (mMmsSelected > 0) {
                     mode.getMenu().findItem(R.id.copy_to_sim).setVisible(false);
-                    mode.getMenu().findItem(R.id.copy).setVisible(false);
                     mode.getMenu().findItem(R.id.save_attachment)
                             .setVisible(isAttachmentSaveable(pos));
                 } else {

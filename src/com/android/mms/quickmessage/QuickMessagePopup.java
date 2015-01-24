@@ -39,6 +39,7 @@ import android.preference.PreferenceManager;
 import android.provider.ContactsContract.Profile;
 import android.support.v4.view.PagerAdapter;
 import android.support.v4.view.ViewPager;
+import android.telephony.SubscriptionManager;
 import android.text.InputFilter;
 import android.text.InputFilter.LengthFilter;
 import android.text.InputType;
@@ -81,19 +82,23 @@ import com.android.internal.telephony.util.BlacklistUtils;
 import com.android.mms.MmsConfig;
 import com.android.mms.R;
 import com.android.mms.data.Contact;
+import com.android.mms.data.ContactList;
 import com.android.mms.data.Conversation;
 import com.android.mms.transaction.MessagingNotification;
 import com.android.mms.transaction.MessagingNotification.NotificationInfo;
 import com.android.mms.transaction.SmsMessageSender;
 import com.android.mms.ui.MessageUtils;
 import com.android.mms.ui.MessagingPreferenceActivity;
+import com.android.mms.ui.MsimDialog;
 import com.google.android.mms.MmsException;
 
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetEncoder;
 import java.text.Normalizer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -113,11 +118,18 @@ public class QuickMessagePopup extends Activity {
     public static final String QR_SHOW_KEYBOARD_EXTRA =
             "com.android.mms.QR_SHOW_KEYBOARD";
 
+    // Message removal
+    public static final String QR_REMOVE_MESSAGES_EXTRA =
+            "com.android.mms.QR_REMOVE_MESSAGES";
+    public static final String QR_THREAD_ID_EXTRA =
+            "com.android.mms.QR_THREAD_ID";
+
     // View items
     private ImageView mQmPagerArrow;
     private TextView mQmMessageCounter;
     private Button mCloseButton;
     private Button mViewButton;
+    private MsimDialog mMsimDialog;
 
     // General items
     private Drawable mDefaultContactImage;
@@ -252,35 +264,44 @@ public class QuickMessagePopup extends Activity {
             return;
         }
 
-        // Parse the intent and ensure we have a notification object to work with
-        NotificationInfo nm = (NotificationInfo) extras.getParcelable(SMS_NOTIFICATION_OBJECT_EXTRA);
-        if (nm != null) {
-            QuickMessage qm = new QuickMessage(extras.getString(SMS_FROM_NAME_EXTRA),
-                    extras.getString(SMS_FROM_NUMBER_EXTRA), nm);
-            mMessageList.add(qm);
-            mPagerAdapter.notifyDataSetChanged();
-            // If triggered from Quick Reply the keyboard should be visible immediately
-            if (extras.getBoolean(QR_SHOW_KEYBOARD_EXTRA, false)) {
-                getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+        // Check if we are being called to remove messages already showing
+        if (extras.getBoolean(QR_REMOVE_MESSAGES_EXTRA, false)) {
+            // Get the ID
+            long threadId = extras.getLong(QR_THREAD_ID_EXTRA, -1);
+            if (threadId != -1) {
+                removeMatchingMessages(threadId);
             }
+        } else {
+            // Parse the intent and ensure we have a notification object to work with
+            NotificationInfo nm = (NotificationInfo) extras.getParcelable(SMS_NOTIFICATION_OBJECT_EXTRA);
+            if (nm != null) {
+                QuickMessage qm = new QuickMessage(extras.getString(SMS_FROM_NAME_EXTRA),
+                        extras.getString(SMS_FROM_NUMBER_EXTRA), nm);
+                mMessageList.add(qm);
+                mPagerAdapter.notifyDataSetChanged();
+                // If triggered from Quick Reply the keyboard should be visible immediately
+                if (extras.getBoolean(QR_SHOW_KEYBOARD_EXTRA, false)) {
+                    getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+                }
 
-            if (newMessage && mCurrentPage != -1) {
-                // There is already a message showing
-                // Stay on the current message
-                mMessagePager.setCurrentItem(mCurrentPage);
-            } else {
-                // Set the current message to the last message received
-                mCurrentPage = mMessageList.size()-1;
-                mMessagePager.setCurrentItem(mCurrentPage);
+                if (newMessage && mCurrentPage != -1) {
+                    // There is already a message showing
+                    // Stay on the current message
+                    mMessagePager.setCurrentItem(mCurrentPage);
+                } else {
+                    // Set the current message to the last message received
+                    mCurrentPage = mMessageList.size()-1;
+                    mMessagePager.setCurrentItem(mCurrentPage);
+                }
+
+                if (DEBUG)
+                    Log.d(LOG_TAG, "parseIntent(): New message from " + qm.getFromName().toString()
+                            + " added. Number of messages = " + mMessageList.size()
+                            + ". Displaying page #" + (mCurrentPage+1));
+
+                // Make sure the counter is accurate
+                updateMessageCounter();
             }
-
-            if (DEBUG)
-                Log.d(LOG_TAG, "parseIntent(): New message from " + qm.getFromName().toString()
-                        + " added. Number of messages = " + mMessageList.size()
-                        + ". Displaying page #" + (mCurrentPage+1));
-
-            // Make sure the counter is accurate
-            updateMessageCounter();
         }
     }
 
@@ -478,6 +499,37 @@ public class QuickMessagePopup extends Activity {
     }
 
     /**
+     * Remove all matching quickmessages for the supplied thread id
+     *
+     * @param threadId
+     */
+    public void removeMatchingMessages(long threadId) {
+        if (DEBUG)
+            Log.d(LOG_TAG, "removeMatchingMessages() looking for match with threadID = " + threadId);
+
+        Iterator<QuickMessage> itr = mMessageList.iterator();
+        QuickMessage qmElement = null;
+
+        // Iterate through the list and remove the messages that match
+        while(itr.hasNext()){
+            qmElement = itr.next();
+            if(qmElement.getThreadId() == threadId) {
+                itr.remove();
+            }
+        }
+
+        // See if there are any remaining messages and update the pager
+        if (mMessageList.size() > 0) {
+            mPagerAdapter.notifyDataSetChanged();
+            mMessagePager.setCurrentItem(1); // First message
+            updateMessageCounter();
+        } else {
+            // we are done
+            finish();
+        }
+    }
+
+    /**
      * Marks the supplied qm as read
      *
      * @param qm
@@ -537,25 +589,70 @@ public class QuickMessagePopup extends Activity {
     }
 
     /**
+     * Sends a quick message immediately, with the only UI being a Toast indicating
+     * success or failure.
+     * @param phoneId The phoneId of the SIM slot to send the message with.
+     * @param threadId The thread ID of the QuickMessage.
+     * @param message The actual message.
+     * @param qm The QuickMessage object to send.
+     */
+    private void sendQuickMessageBackground(int phoneId, long threadId,
+                                            String message, QuickMessage qm) {
+        SmsMessageSender sender = new SmsMessageSender(getBaseContext(),
+                                                       qm.getFromNumber(), message,
+                                                       threadId, phoneId);
+
+        try {
+            if (DEBUG) {
+                Log.d(LOG_TAG, "sendQuickMessage(): Sending message to " + qm.getFromName()
+                               + ", with threadID = " + threadId + ". Current page is #" + (
+                        mCurrentPage + 1));
+            }
+
+            sender.sendMessage(threadId);
+            Toast.makeText(mContext, R.string.toast_sending_message, Toast.LENGTH_SHORT)
+                    .show();
+        } catch (MmsException e) {
+            if (DEBUG) {
+                Log.e(LOG_TAG, "Error sending message to " + qm.getFromName());
+            }
+        }
+    }
+
+    /**
      * Use standard api to send the supplied message
      *
      * @param message - message to send
      * @param qm - qm to reply to (for sender details)
      */
-    private void sendQuickMessage(String message, QuickMessage qm) {
+    private void sendQuickMessage(final String message, final QuickMessage qm) {
         if (message != null && qm != null) {
-            long threadId = qm.getThreadId();
-            SmsMessageSender sender = new SmsMessageSender(getBaseContext(),
-                    qm.getFromNumber(), message, threadId, PhoneConstants.PHONE_ID1);
-            try {
-                if (DEBUG)
-                    Log.d(LOG_TAG, "sendQuickMessage(): Sending message to " + qm.getFromName()
-                            + ", with threadID = " + threadId + ". Current page is #" + (mCurrentPage+1));
+            final long threadId = qm.getThreadId();
 
-                sender.sendMessage(threadId);
-                Toast.makeText(mContext, R.string.toast_sending_message, Toast.LENGTH_SHORT).show();
-            } catch (MmsException e) {
-                Log.e(LOG_TAG, "Error sending message to " + qm.getFromName());
+            // If SMS prompt is enabled, prompt the user.
+            // Use the default SMS phone ID to reply in the multi-sim environment.
+            if (SubscriptionManager.isSMSPromptEnabled()) {
+                List<String> fromNumbers = Arrays.asList(qm.getFromNumber());
+                ContactList recipients = ContactList.getByNumbers(fromNumbers,
+                                                                  true);
+                mMsimDialog = new MsimDialog(this,
+                                             new MsimDialog.OnSimButtonClickListener() {
+                                                 @Override
+                                                 public void onSimButtonClick(int phoneId) {
+                                                     sendQuickMessageBackground(phoneId,
+                                                                                threadId,
+                                                                                message,
+                                                                                qm);
+                                                     mPagerAdapter.moveOn(qm);
+                                                     mMsimDialog.dismiss();
+                                                 }
+                                             },
+                                             recipients);
+                mMsimDialog.show();
+            } else {
+                long subId = SubscriptionManager.getDefaultSmsSubId();
+                int phoneId = SubscriptionManager.getPhoneId(subId);
+                sendQuickMessageBackground(phoneId, threadId, message, qm);
             }
         }
     }
@@ -826,14 +923,25 @@ public class QuickMessagePopup extends Activity {
 
         /**
          * This method sends the supplied message in reply to the supplied qm and then
-         * moves to the next or previous message as appropriate. If this is the last qm
-         * in the MessageList, we end by clearing the notification and calling finish()
+         * moves to the next or previous message as appropriate.
          *
          * @param message - message to send
          * @param qm - qm we are replying to (for sender details)
          */
         private void sendMessageAndMoveOn(String message, QuickMessage qm) {
             sendQuickMessage(message, qm);
+            if (mMsimDialog == null || !mMsimDialog.isShowing()) {
+                moveOn(qm);
+            }
+        }
+
+        /**
+         * Sends the supplied message in reply to the supplied qm and then
+         * moves to the next or previous message as appropriate. If this is the last qm
+         * in the MessageList, we end by clearing the notification and calling finish()
+         * @param qm - qm we are replying to (for sender details)
+         */
+        public void moveOn(QuickMessage qm) {
             // Close the current QM and move on
             int numMessages = mMessageList.size();
             if (numMessages == 1) {
